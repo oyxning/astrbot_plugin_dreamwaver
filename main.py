@@ -224,8 +224,11 @@ class DreamWaver(Star):
             group_name = "一个神秘的梦境空间"
             if not event.is_private_chat():
                 group = await event.get_group()
-                if group and group.name:
-                    group_name = group.name
+                if group and hasattr(group, 'group_name'):
+                    group_name = group.group_name
+                elif group:
+                    group_name = f"群聊 {group.id}"
+
 
             render_data = {
                 "theme": self.config.get("dream_theme", "midnight_gothic"),
