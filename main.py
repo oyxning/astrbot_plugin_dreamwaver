@@ -180,24 +180,26 @@ class DreamWaver(Star):
             if not conversation or not conversation.history:
                 return {"error": "这里似乎一片寂静，连梦的碎片也找不到。"}
 
-            # FIX: Parse the conversation.history from a JSON string to a Python list
-            history = json.loads(conversation.history)
+            history_list = json.loads(conversation.history)
             
+            max_messages = self.config.get("max_history_messages", 300)
             min_messages = self.config.get("min_messages_for_dream", 20)
-            start_time = datetime.now() - time_delta
             
             recent_messages_content = []
-            for msg in reversed(history):
-                # Now 'msg' is a dictionary, so .get() will work correctly.
-                msg_time = datetime.fromtimestamp(msg.get("create_time", 0))
-                if msg_time < start_time:
+            for msg in reversed(history_list):
+                if len(recent_messages_content) >= max_messages:
                     break
+                
+                if not isinstance(msg, dict):
+                    continue
+
                 if msg.get("role") == "assistant" or not msg.get("content"):
                     continue
+                
                 recent_messages_content.append(msg.get("content", ""))
 
             if len(recent_messages_content) < min_messages:
-                return {"error": f"梦境的素材太少了，至少需要 {min_messages} 条对话才能编织哦。"}
+                return {"error": f"梦境的素材太少了，至少需要 {min_messages} 条有效对话才能编织哦。"}
             
             recent_messages_content.reverse()
             formatted_dialogue = "\n".join([f"- {c}" for c in recent_messages_content])
