@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Dict
 
@@ -7,9 +8,6 @@ from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from astrbot.core.conversation_mgr import Conversation
 
-# --- HTML & CSS Template ---
-# This is where the magic of aesthetics happens.
-# We define the visual styles for the dream cards here.
 DREAM_TEMPLATE_HTML = """
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -148,7 +146,6 @@ class DreamWaver(Star):
             self.monitor_task = asyncio.create_task(self._daily_dream_task())
 
     async def _daily_dream_task(self):
-        """A background task for daily automatic triggering."""
         while True:
             now = datetime.now()
             trigger_time_str = self.config.get("auto_trigger_time", "23:59")
@@ -156,7 +153,7 @@ class DreamWaver(Star):
                 hour, minute = map(int, trigger_time_str.split(':'))
             except ValueError:
                 logger.error(f"[DreamWaver] Invalid auto_trigger_time format: {trigger_time_str}. Please use HH:MM format.")
-                await asyncio.sleep(3600) # Retry after 1 hour
+                await asyncio.sleep(3600) 
                 continue
 
             next_trigger = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -169,18 +166,12 @@ class DreamWaver(Star):
 
             logger.info("[DreamWaver] Daily auto-dream task triggered.")
             # This is a pseudo-code implementation as the documentation does not provide a direct API
-            # to get all active sessions. A real implementation would require framework support
-            # for iterating through all sessions or fetching them from a database.
+            # to get all active sessions. A real implementation would require framework support.
             # for uid in self.context.conversation_manager.get_all_uids():
             #     await self.generate_and_send_dream(uid)
             
     async def _generate_dream(self, event: AstrMessageEvent, time_delta: timedelta) -> Dict:
-        """
-        The core logic for generating a dream.
-        Returns a dictionary containing the image URL or an error message.
-        """
         try:
-            # 1. Get conversation history
             uid = event.unified_msg_origin
             curr_cid = await self.context.conversation_manager.get_curr_conversation_id(uid)
             if not curr_cid:
@@ -189,13 +180,15 @@ class DreamWaver(Star):
             if not conversation or not conversation.history:
                 return {"error": "这里似乎一片寂静，连梦的碎片也找不到。"}
 
-            # 2. Filter and format history messages
-            history = conversation.history
+            # FIX: Parse the conversation.history from a JSON string to a Python list
+            history = json.loads(conversation.history)
+            
             min_messages = self.config.get("min_messages_for_dream", 20)
             start_time = datetime.now() - time_delta
             
             recent_messages_content = []
             for msg in reversed(history):
+                # Now 'msg' is a dictionary, so .get() will work correctly.
                 msg_time = datetime.fromtimestamp(msg.get("create_time", 0))
                 if msg_time < start_time:
                     break
@@ -209,7 +202,6 @@ class DreamWaver(Star):
             recent_messages_content.reverse()
             formatted_dialogue = "\n".join([f"- {c}" for c in recent_messages_content])
 
-            # 3. Construct creative prompt and call LLM
             llm_provider = self.context.get_using_provider()
             if not llm_provider:
                 return {"error": "核心分析服务不可用，请联系管理员。"}
@@ -227,7 +219,6 @@ class DreamWaver(Star):
             result = await llm_provider.text_chat(prompt=dream_prompt, session_id=f"dream_{event.get_session_id()}")
             dream_text = result.completion_text.strip()
 
-            # 4. Prepare data for rendering and call html_render
             group_name = "一个神秘的梦境空间"
             if not event.is_private_chat():
                 group = await event.get_group()
@@ -250,7 +241,6 @@ class DreamWaver(Star):
 
     @filter.command("dream", aliases={"入梦", "织梦"})
     async def dream_handler(self, event: AstrMessageEvent):
-        """Handles the /dream command."""
         if not self.config.get("enabled"):
             return
 
@@ -264,7 +254,6 @@ class DreamWaver(Star):
             yield event.plain_result(f"❌ {result_dict.get('error', '未知错误')}")
 
     async def terminate(self):
-        """Clean up when the plugin is disabled or reloaded."""
         if self.monitor_task:
             self.monitor_task.cancel()
             try:
@@ -272,4 +261,3 @@ class DreamWaver(Star):
             except asyncio.CancelledError:
                 logger.info("[DreamWaver] Daily dream monitoring task cancelled.")
         logger.info("DreamWaver plugin terminated.")
-
