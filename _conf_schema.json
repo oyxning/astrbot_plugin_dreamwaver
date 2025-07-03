@@ -1,0 +1,49 @@
+{
+    "enabled": {
+        "description": "是否启用入梦师插件。",
+        "type": "bool",
+        "hint": "设置为 True 启用，False 关闭。",
+        "default": true
+    },
+    "trigger_mode": {
+        "description": "触发方式",
+        "type": "string",
+        "enum": [
+            {"value": "command_only", "label": "仅指令触发"},
+            {"value": "daily_auto", "label": "每日自动 + 指令"}
+        ],
+        "default": "command_only",
+        "ui:widget": "select",
+        "hint": "选择如何生成梦境故事。'每日自动'将在指定时间自动发布，'仅指令'则只响应 /dream 指令。"
+    },
+    "auto_trigger_time": {
+        "description": "每日自动触发时间 (HH:MM格式)",
+        "type": "string",
+        "default": "23:59",
+        "hint": "当触发方式包含'每日自动'时，在此时间点为所有活跃群聊生成梦境。"
+    },
+    "dream_style": {
+        "description": "梦境的文学风格",
+        "type": "string",
+        "default": "一段融合了赛博朋克与古典悲剧元素的意识流独白",
+        "hint": "定义AI生成内容的文学风格，例如：'克苏鲁神话般的低语', '王家卫电影风格的旁白', '一篇意识流小说片段'等。"
+    },
+    "dream_theme": {
+        "description": "梦境的视觉主题",
+        "type": "string",
+        "enum": [
+            {"value": "midnight_gothic", "label": "午夜哥特"},
+            {"value": "starlight_nebula", "label": "星光星云"},
+            {"value": "ancient_scroll", "label": "古旧羊皮卷"}
+        ],
+        "default": "midnight_gothic",
+        "ui:widget": "select",
+        "hint": "选择生成的梦境图片的视觉主题风格。"
+    },
+    "min_messages_for_dream": {
+        "description": "生成梦境所需的最小消息数",
+        "type": "int",
+        "default": 20,
+        "hint": "在指定时间段内，如果消息总数少于此值，则认为素材不足，不生成梦境。"
+    }
+}
