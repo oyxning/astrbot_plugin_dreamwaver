@@ -1,12 +1,13 @@
 import asyncio
 import json
 from datetime import datetime, timedelta
-from typing import Dict
+from typing import Dict, List
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from astrbot.core.conversation_mgr import Conversation
+from astrbot.api.message_components import Image
 
 DREAM_TEMPLATE_HTML = """
 <!DOCTYPE html>
@@ -135,10 +136,13 @@ class DreamWaver(Star):
             "dream_style": "一段融合了赛博朋克与古典悲剧元素的意识流独白",
             "dream_theme": "midnight_gothic",
             "min_messages_for_dream": 20,
+            "known_groups": {}
         }
         for key, value in defaults.items():
             if key not in self.config:
                 self.config[key] = value
+        
+        self.known_groups = self.config.get("known_groups", {})
         self.config.save_config()
 
         self.monitor_task = None
@@ -152,8 +156,8 @@ class DreamWaver(Star):
             try:
                 hour, minute = map(int, trigger_time_str.split(':'))
             except ValueError:
-                logger.error(f"[DreamWaver] Invalid auto_trigger_time format: {trigger_time_str}. Please use HH:MM format.")
-                await asyncio.sleep(3600) 
+                logger.error(f"[DreamWaver] 自动触发时间格式错误: {trigger_time_str}，请使用 HH:MM 格式。")
+                await asyncio.sleep(3600)
                 continue
 
             next_trigger = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -161,18 +165,29 @@ class DreamWaver(Star):
                 next_trigger += timedelta(days=1)
             
             sleep_seconds = (next_trigger - now).total_seconds()
-            logger.info(f"[DreamWaver] Next automatic dream at: {next_trigger}, waiting for {sleep_seconds:.0f} seconds.")
+            logger.info(f"[DreamWaver] 下次自动入梦时间: {next_trigger}，等待 {sleep_seconds:.0f} 秒。")
             await asyncio.sleep(sleep_seconds)
 
-            logger.info("[DreamWaver] Daily auto-dream task triggered.")
-            # This is a pseudo-code implementation as the documentation does not provide a direct API
-            # to get all active sessions. A real implementation would require framework support.
-            # for uid in self.context.conversation_manager.get_all_uids():
-            #     await self.generate_and_send_dream(uid)
-            
-    async def _generate_dream(self, event: AstrMessageEvent, time_delta: timedelta) -> Dict:
+            logger.info("[DreamWaver] 每日自动入梦任务已触发。")
+            if not self.known_groups:
+                logger.info("[DreamWaver] 未发现已知的群聊，自动任务跳过。")
+                continue
+
+            for uid, group_name in self.known_groups.items():
+                try:
+                    result_dict = await self._generate_dream_for_uid(uid, group_name)
+                    if "image_url" in result_dict:
+                        chain = [Image.fromURL(result_dict["image_url"])]
+                        await self.context.send_message(uid, chain)
+                        logger.info(f"[DreamWaver] 已自动为群聊 '{group_name}' ({uid}) 发送梦境。")
+                        await asyncio.sleep(5)
+                    else:
+                        logger.warning(f"[DreamWaver] 自动为群聊 '{group_name}' 生成梦境失败: {result_dict.get('error')}")
+                except Exception as e:
+                    logger.error(f"[DreamWaver] 自动处理群聊 {uid} 时发生未知错误: {e}", exc_info=True)
+
+    async def _generate_dream_for_uid(self, uid: str, group_name: str) -> Dict:
         try:
-            uid = event.unified_msg_origin
             curr_cid = await self.context.conversation_manager.get_curr_conversation_id(uid)
             if not curr_cid:
                 return {"error": "无法找到当前会话。"}
@@ -181,27 +196,23 @@ class DreamWaver(Star):
                 return {"error": "这里似乎一片寂静，连梦的碎片也找不到。"}
 
             history_list = json.loads(conversation.history)
-            
-            max_messages = self.config.get("max_history_messages", 300)
             min_messages = self.config.get("min_messages_for_dream", 20)
+            start_time = datetime.now() - timedelta(days=1)
             
             recent_messages_content = []
             for msg in reversed(history_list):
-                if len(recent_messages_content) >= max_messages:
-                    break
+                if not isinstance(msg, dict): continue
                 
-                if not isinstance(msg, dict):
-                    continue
-
-                if msg.get("role") == "assistant" or not msg.get("content"):
-                    continue
+                msg_time = datetime.fromtimestamp(msg.get("create_time", 0))
+                if msg_time < start_time: break
                 
-                recent_messages_content.append(msg.get("content", ""))
+                if msg.get("role") == "assistant" or not msg.get("content"): continue
+                
+                recent_messages_content.insert(0, msg.get("content", ""))
 
             if len(recent_messages_content) < min_messages:
                 return {"error": f"梦境的素材太少了，至少需要 {min_messages} 条有效对话才能编织哦。"}
             
-            recent_messages_content.reverse()
             formatted_dialogue = "\n".join([f"- {c}" for c in recent_messages_content])
 
             llm_provider = self.context.get_using_provider()
@@ -218,17 +229,8 @@ class DreamWaver(Star):
                 "--- 素材结束 ---\n\n"
                 "现在，请开始你的创作："
             )
-            result = await llm_provider.text_chat(prompt=dream_prompt, session_id=f"dream_{event.get_session_id()}")
+            result = await llm_provider.text_chat(prompt=dream_prompt, session_id=f"dream_{uid}")
             dream_text = result.completion_text.strip()
-
-            group_name = "一个神秘的梦境空间"
-            if not event.is_private_chat():
-                group = await event.get_group()
-                if group and hasattr(group, 'group_name'):
-                    group_name = group.group_name
-                elif group:
-                    group_name = f"群聊 {group.id}"
-
 
             render_data = {
                 "theme": self.config.get("dream_theme", "midnight_gothic"),
@@ -241,7 +243,7 @@ class DreamWaver(Star):
             return {"image_url": image_url}
 
         except Exception as e:
-            logger.error(f"[DreamWaver] Error during dream generation: {e}", exc_info=True)
+            logger.error(f"[DreamWaver] 为 UID {uid} 生成梦境时发生错误: {e}", exc_info=True)
             return {"error": "梦境在编织的途中消散了，似乎遇到了一些阻碍..."}
 
     @filter.command("dream", aliases={"入梦", "织梦"})
@@ -251,7 +253,23 @@ class DreamWaver(Star):
 
         yield event.plain_result("嘘...我正在潜入大家的意识深处，寻找梦的素材...")
         
-        result_dict = await self._generate_dream(event, timedelta(days=1))
+        uid = event.unified_msg_origin
+        group_name = "一个神秘的梦境空间"
+
+        if not event.is_private_chat():
+            group = await event.get_group()
+            # Correctly access group_name and update known_groups
+            if group and hasattr(group, 'group_name') and group.group_name:
+                group_name = group.group_name
+                # Learn/update the group for auto-trigger
+                if uid not in self.known_groups or self.known_groups.get(uid) != group_name:
+                    self.known_groups[uid] = group_name
+                    self.config["known_groups"] = self.known_groups
+                    self.config.save_config()
+            elif group:
+                group_name = f"群聊 {group.group_id}"
+
+        result_dict = await self._generate_dream_for_uid(uid, group_name)
         
         if "image_url" in result_dict:
             yield event.image_result(result_dict["image_url"])
@@ -264,5 +282,5 @@ class DreamWaver(Star):
             try:
                 await self.monitor_task
             except asyncio.CancelledError:
-                logger.info("[DreamWaver] Daily dream monitoring task cancelled.")
-        logger.info("DreamWaver plugin terminated.")
+                logger.info("[DreamWaver] 每日梦境监控任务已取消。")
+        logger.info("DreamWaver 插件已终止。")
